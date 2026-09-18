@@ -72,13 +72,20 @@ def _fmt(d: datetime) -> str:
 
 def update_symbol(conn: sqlite3.Connection, code: str, params,
                   end: Optional[datetime] = None,
-                  force_full: bool = False) -> Tuple[str, int, str]:
+                  force_full: bool = False,
+                  upto: Optional[str] = None) -> Tuple[str, int, str]:
     """增量或全量更新单只股票。
 
     返回 (status, rows, source)；status ∈ {full, incremental, failed, uptodate}
+
+    upto：库内最新交易日（fetch_all 在批次开始时计算一次传入）。
+    该股的 latest >= upto 说明已随本轮/前次运行更新到最新交易日，
+    直接跳过、零网络请求——中断重启后已下载部分秒级跳过，实现断点续传。
     """
     end = end or datetime.today()
     latest = get_latest_date(conn, code)
+    if not force_full and latest and upto and latest >= upto:
+        return "uptodate", 0, "cache"
     if not force_full and latest:
         start_dt = datetime.strptime(latest, "%Y-%m-%d") - timedelta(days=1)
         mode = "incremental"
@@ -102,10 +109,15 @@ def fetch_all(conn: sqlite3.Connection, codes, params, end=None,
     """批量更新。返回统计 dict。"""
     from . import data_source as ds
 
-    stats = {"full": 0, "incremental": 0, "failed": 0, "rows": 0, "failed_codes": []}
+    stats = {"full": 0, "incremental": 0, "failed": 0, "uptodate": 0,
+             "rows": 0, "failed_codes": []}
+    # 批次基准：用腾讯实时报价推断最新交易日（1 次请求）。已更新到该日的
+    # 股票跳过（断点续传）；推断失败则不跳过，退化为逐只增量，行为安全。
+    upto = ds.latest_trading_day()
     total = len(codes)
     for i, code in enumerate(codes, 1):
-        status, rows, source = update_symbol(conn, code, params, end=end, force_full=force_full)
+        status, rows, source = update_symbol(conn, code, params, end=end,
+                                             force_full=force_full, upto=upto)
         stats[status] = stats.get(status, 0) + 1
         stats["rows"] += rows
         if status == "failed":

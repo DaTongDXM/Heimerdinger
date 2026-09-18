@@ -63,6 +63,30 @@ def _to_tencent_symbol(code: str) -> str:
     return f"sz{code}"
 
 
+def latest_trading_day(ref_code: str = "600519") -> Optional[str]:
+    """用腾讯实时报价推断最新交易日（格式 YYYY-MM-DD）。
+
+    报价串中含最近行情时间戳（14 位 YYYYMMDDHHMMSS），取日期部分。
+    周末/节假日返回上一交易日；失败返回 None（调用方应退化为不跳过）。
+    """
+    import re
+
+    import requests
+
+    try:
+        sym = _to_tencent_symbol(ref_code)
+        r = requests.get(f"http://qt.gtimg.cn/q={sym}", timeout=8)
+        r.raise_for_status()
+        r.encoding = "gbk"
+        fields = r.text.split("=", 1)[1].strip().strip('";').split("~")
+        for f in fields:
+            if re.fullmatch(r"\d{14}", f or ""):
+                return f"{f[:4]}-{f[4:6]}-{f[6:8]}"
+    except Exception:  # noqa: BLE001 - 推断失败不致命
+        pass
+    return None
+
+
 def _normalize(df: pd.DataFrame, mapping: dict) -> pd.DataFrame:
     df = df.rename(columns=mapping)
     missing = [c for c in _STD_COLS if c not in df.columns]

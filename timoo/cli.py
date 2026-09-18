@@ -75,7 +75,7 @@ def cmd_fetch(args):
 
     stats = cache.fetch_all(conn, codes, P, force_full=args.full, progress=prog)
     print(f"[fetch] full={stats['full']} incremental={stats['incremental']} "
-          f"failed={stats['failed']} rows={stats['rows']}")
+          f"uptodate={stats.get('uptodate', 0)} failed={stats['failed']} rows={stats['rows']}")
     if stats["failed_codes"]:
         out = ROOT / "data" / "failed" / f"{datetime.today():%Y-%m-%d}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
