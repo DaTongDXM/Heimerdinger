@@ -1,0 +1,77 @@
+# timoo
+
+个人短线交易纪律执行系统。**不是选股工具，是纪律执行工具**——把「位置优先 → 信号确认 → 类型化出入场规则 → 观察池跟踪」固化为每日流水线。
+
+规范来源：《个人短线交易系统框架规范 v1.3》，完整需求见 [`docs/`](./docs)。
+
+## 快速开始
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+python -m timoo.cli selftest              # 规则自检（23 项，不需要网络）
+python -m timoo.cli simulate --stocks 30  # 离线端到端（合成数据，不需要网络）
+python -m timoo.cli init                  # 初始化数据库
+python -m timoo.cli universe              # 构建 universe
+python -m timoo.cli fetch --limit 50      # 拉取日线（首次建议 --full）
+python -m timoo.cli scan --limit 50       # 全流程扫描，输出候选清单
+```
+
+候选清单落盘在 `data/candidates/YYYY-MM-DD.json`。
+
+## 命令
+
+| 命令 | 说明 |
+|------|------|
+| `init` | 初始化 SQLite 与参数版本 |
+| `universe` | 构建 universe（板块前缀 + ST 动态重判 + 次新股剔除） |
+| `fetch` | 日线增量/全量更新（AKShare 主源 + 腾讯兜底） |
+| `scan` | 全流程：位置分类 → 信号筛选 → 类型匹配 → 候选清单 |
+| `selftest` | 规则自检（N1-N8 + 入场单 8 项 + 位置分类测试用例） |
+| `simulate` | 离线端到端，合成数据验证流水线（不需要网络） |
+
+## 当前进度
+
+已完成 **M1 数据底座 + M2 筛选闭环**（T01-T06）：
+
+- [x] 参数集中管理 + 版本化（结果可复现）
+- [x] universe 过滤（U-1~U-4）
+- [x] 日线获取（qfq 前复权、主备切换、失败清单不阻塞）
+- [x] 增量缓存（SQLite）
+- [x] 指标层（MA / KDJ / MACD / 量能）
+- [x] 位置三分类 + 硬过滤（含 Q1 自适应平台、Q9 趋势约束）
+- [x] 信号族 + 有效组合校验（N1 单独 KDJ 金叉无效）
+- [x] 类型匹配 A/B/C（含 Q4 加仓计划）
+- [ ] T07 入场单 8 项落库 + 强制校验
+- [ ] T08 出场引擎 + 观察池
+- [ ] T09-T10 FastAPI + Web UI
+- [ ] T11 月度统计
+
+## 设计要点
+
+- **先位置、后信号**：下跌中继在阶段②被硬过滤，不进入信号计算。
+- **口径强制**：所有指标基于 T-1 及以前收盘数据，指标模块不接受盘中价参数。
+- **参数版本化**：每次运行记录 `param_version`，同一参数 + 同一日线快照 → 结果一致。
+- **禁止事项内建**：N1-N8 由 `timoo/guard.py` 统一拦截，资金流相关逻辑无任何代码路径。
+
+## 网络说明
+
+行情接口为东财 / 腾讯公开接口。若环境存在 `HTTP_PROXY` 导致连接被拒，程序默认直连；
+需要走代理时设置环境变量 `TIMOO_USE_PROXY=1`。
+
+## 文档
+
+| 文档 | 用途 |
+|------|------|
+| [docs/README.md](./docs/README.md) | 文档索引与决策状态 |
+| [docs/PRD.md](./docs/PRD.md) | 需求池 P0/P1/P2、验收标准 |
+| [docs/STRATEGY_SPEC.md](./docs/STRATEGY_SPEC.md) | 规则工程化规格（开发唯一依据） |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构、数据模型、任务列表 |
+| [docs/ROADMAP.md](./docs/ROADMAP.md) | 路线图与优先级 |
+| [docs/METRICS.md](./docs/METRICS.md) | 北极星指标 PAR 与验证闭环 |
+
+---
+
+仅供个人研究使用，不构成投资建议。
