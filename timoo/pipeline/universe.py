@@ -5,77 +5,89 @@
 - 剔除：科创板 688/689、北交所 43/83/87/92（及 8 开头其余）、ST/*ST/退
 - 剔除：上市不足 130 个交易日次新股（U-3）
 - ST 判定必须每次运行重新执行，禁止使用缓存名单（U-2）
+
+数据源（2026-09-18 修订：东财接口全部移除）：
+- 代码清单：ak.stock_info_a_code_name（AKShare 封装）
+- 名称/ST 状态：腾讯 qt.gtimg.cn 实时报价批量刷新（保证当日 ST 标记最新）
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List
 
 import pandas as pd
 
 from ..config import EXCLUDE_PREFIXES, KEEP_PREFIXES, ST_KEYWORDS
 
+_TX_QUOTE_URL = "http://qt.gtimg.cn/q="
+_TX_BATCH = 60          # 单次批量报价的股票数
+_TX_BATCH_SLEEP = 0.15  # 批次间隔（秒）
 
-_EM_CLIST_URL = "https://82.push2.eastmoney.com/api/qt/clist/get"
-# 分段拉取：单次查询覆盖全部板块时返回数据量过大，部分网络环境下会被服务端断开。
-_EM_SEGMENTS = ("m:0+t:6,m:0+t:80", "m:1+t:2,m:1+t:23")
 
+def _fetch_tencent_names(codes: List[str]) -> Dict[str, str]:
+    """腾讯实时报价批量拉取代码→名称（用于刷新 ST 状态）。
 
-def _fetch_spot_by_segments(pz: int = 100, sleep: float = 0.6) -> pd.DataFrame:
-    """兜底：按板块分段请求东财 clist 接口，合并去重。"""
-    import time
-
+    响应为 GBK 文本：v_sh600000="1~浦发银行~600000~现价~昨收~…";
+    字段 [1]=名称，[2]=代码。异常行直接跳过。
+    """
     import requests
 
-    rows: dict = {}
-    for fs in _EM_SEGMENTS:
-        pn = 1
-        while True:
-            params = {"pn": pn, "pz": pz, "po": 1, "np": 1, "fltt": 2, "invt": 2,
-                      "fid": "f12", "fs": fs, "fields": "f12,f14"}
-            r = requests.get(_EM_CLIST_URL, params=params, timeout=15)
-            r.raise_for_status()
-            js = r.json() or {}
-            data = js.get("data") or {}
-            diff = data.get("diff") or []
-            if not diff:
-                break
-            for it in diff:
-                code = str(it.get("f12", "")).strip()
-                if code:
-                    rows[code] = str(it.get("f14", "")).strip()
-            total = int(data.get("total") or 0)
-            if pn * pz >= total:
-                break
-            pn += 1
-            time.sleep(sleep)
-    if not rows:
-        raise RuntimeError("分段拉取未获得任何股票")
-    return pd.DataFrame([{"代码": c, "名称": n} for c, n in rows.items()])
+    names: Dict[str, str] = {}
+    for i in range(0, len(codes), _TX_BATCH):
+        batch = codes[i:i + _TX_BATCH]
+        syms = ",".join(("sh" if c.startswith("6") else "sz") + c for c in batch)
+        r = requests.get(_TX_QUOTE_URL + syms, timeout=15)
+        r.raise_for_status()
+        r.encoding = "gbk"
+        for line in r.text.splitlines():
+            line = line.strip().rstrip(";")
+            if "~" not in line or "=" not in line:
+                continue
+            try:
+                fields = line.split("=", 1)[1].strip('"').split("~")
+                code, name = fields[2], fields[1]
+            except (IndexError, ValueError):
+                continue
+            if code in batch and name:
+                names[code] = name
+        if i + _TX_BATCH < len(codes):
+            time.sleep(_TX_BATCH_SLEEP)
+    return names
 
 
 def fetch_spot(retries: int = 2, sleep: float = 2.0) -> pd.DataFrame:
     """拉取全市场 A 股快照（代码 + 名称）。
 
-    主路径：``ak.stock_zh_a_spot_em``；失败则降级为分段直连东财接口。
+    ① AKShare 封装拉代码清单（含兜底名称）；
+    ② 腾讯实时报价批量刷新名称（U-2：ST 判定用当日最新名称）；
+       腾讯批量失败时退回 ① 的名称，不阻塞流程。
+    返回列：代码、名称（与东财快照同构，build_universe 无需感知来源）。
     """
-    import time
+    import akshare as ak
 
+    last: Exception | None = None
+    base = None
+    for i in range(retries):
+        try:
+            base = ak.stock_info_a_code_name()  # code, name 两列
+            break
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(sleep)
+    if base is None:
+        raise RuntimeError(f"AKShare 代码清单获取失败: {last}") from last
+
+    base = base.rename(columns={"code": "代码", "name": "名称"})
+    base["代码"] = base["代码"].astype(str).str.strip().str.zfill(6)
     try:
-        import akshare as ak  # lazy import：未安装时 CLI 仍可 --help
-
-        last: Exception | None = None
-        for i in range(retries):
-            try:
-                return ak.stock_zh_a_spot_em()
-            except Exception as e:  # noqa: BLE001
-                last = e
-                time.sleep(sleep)
-        raise RuntimeError(f"akshare 快照失败: {last}") from last
-    except RuntimeError:
-        return _fetch_spot_by_segments()
-    except ImportError:
-        return _fetch_spot_by_segments()
+        tnames = _fetch_tencent_names(base["代码"].tolist())
+        if tnames:
+            # 腾讯实时名称优先（ST 状态当日最新），缺失的回退 AKShare 名称
+            base["名称"] = base["代码"].map(tnames).fillna(base["名称"])
+    except Exception:  # noqa: BLE001 - 腾讯批量失败不阻塞，用 AKShare 名称
+        pass
+    return base[["代码", "名称"]].reset_index(drop=True)
 
 
 def _norm_code(code: Any) -> str:

@@ -13,9 +13,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from ..pipeline.data_source import configure_network
 from .routes import router
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# API 进程同样需要直连行情域名（绕过系统代理），与 CLI 行为一致
+import os  # noqa: E402
+
+configure_network(os.environ.get("TIMOO_USE_PROXY", "") != "1")
 
 app = FastAPI(title="timoo", version="0.1.0",
               description="个人短线交易纪律执行系统 API")

@@ -47,8 +47,8 @@
 |------|------|------|
 | 语言 | Python 3.11+ | 与规范伪代码一致，AKShare 生态 |
 | CLI | `typer` 或 `argparse` | 轻量，命令即入口 |
-| 数据源 | `akshare` | 免费开源，覆盖全市场日线；规范指定主源 |
-| 兜底源 | 腾讯财经（akshare 内置 `stock_zh_a_hist_tx`） | 主源失败切换 |
+| 数据源 | 腾讯财经（AKShare 封装 `stock_zh_a_hist_tx`） | 2026-09-18 修订：东财接口全部移除 |
+| 兜底源 | 腾讯 `ifzq.gtimg.cn` fqkline 直连 | 主源失败切换；universe 清单走 `ak.stock_info_a_code_name` + `qt.gtimg.cn` 实时名称 |
 | 计算 | `numpy` + `pandas` | 指标向量化 |
 | 存储 | **SQLite**（+ SQLAlchemy 可选） | 单机、零运维；日线缓存与交易记录统一 |
 | API | FastAPI（薄层） | 自动 OpenAPI，SSE 支持扫描进度 |
