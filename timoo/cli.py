@@ -16,9 +16,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from .config import DEFAULT as P
-from .pipeline import cache, cleaner, matcher, position, signal, universe
-from .storage import db
+from .pipeline import (cache, cleaner, entry_order, exit_engine, matcher,
+                       position, signal, universe, watch_pool)
+from .storage import db, repo
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -214,6 +217,92 @@ def cmd_simulate(args):
     conn.close()
 
 
+def cmd_order(args):
+    """阶段⑤：从扫描结果生成入场单并提交（8 项强制校验）。"""
+    conn = _conn()
+    try:
+        order = entry_order.build_from_scan(
+            conn, args.code, args.type, P,
+            entry_price=args.entry_price,
+            structure_position=args.position)
+    except ValueError as e:
+        print(f"[order] {e}")
+        conn.close()
+        return
+    order["stop_loss_price"] = args.stop
+    order["first_target_price"] = args.target
+    if args.facts:
+        order["observed_facts"] = args.facts
+    ok, oid, errors = entry_order.submit(conn, order, P)
+    if ok:
+        print(f"[order] 已保存 #{oid} {order['code']} {order['name']} "
+              f"类型{order['trade_type']} 止损{order['stop_loss_price']} "
+              f"目标{order['first_target_price']} 时间止损{order['time_stop_days']}日")
+    else:
+        print("[order] 被拒绝：")
+        for e in errors:
+            print("   -", e)
+    conn.close()
+
+
+def cmd_monitor(args):
+    """阶段⑥：按入场时锁定的规则判定出场，输出次日动作。"""
+    conn = _conn()
+    today = datetime.today().strftime("%Y-%m-%d")
+    orders = repo.get_open_orders(conn)
+    if not orders:
+        print("[monitor] 无持仓")
+        conn.close()
+        return
+    for o in orders:
+        kline = cleaner.clean(cache.load_kline(conn, o["code"], limit=int(P["HISTORY_DAYS"])))
+        act = exit_engine.evaluate(conn, o, kline, P)
+        tag = {"HOLD": "持有", "EXIT": "离场", "REDUCE_HALF": "减半",
+               "CONVERT_TO_B": "转B类管理"}.get(act["action"], act["action"])
+        print(f"  #{o['id']} {o['code']} {o['name']} 类型{o['trade_type']} -> "
+              f"{tag} {act['hit_rule'] or ''} {act['detail']}")
+        if not args.confirm:
+            continue
+        if act["action"] == "EXIT":
+            exit_day_high = float(pd.to_numeric(kline["high"]).iloc[-1]) if len(kline) else None
+            repo.save_exit(conn, o["id"], today,
+                           float(pd.to_numeric(kline["close"]).iloc[-1]),
+                           act["detail"].get("hold_days", 0),
+                           act["exit_type"], act["hit_rule"])
+            watch_pool.add_from_exit(conn, o["code"], act["exit_type"], today,
+                                     exit_day_high, P)
+            print(f"    -> 已离场并入观察池")
+        elif act["action"] == "REDUCE_HALF":
+            repo.save_partial_exit(conn, o["id"], today,
+                                   float(pd.to_numeric(kline["close"]).iloc[-1]),
+                                   act["detail"].get("hold_days", 0), act["hit_rule"])
+            print("    -> 已减半，剩余仓位按保护线管理")
+    conn.close()
+
+
+def cmd_watch(args):
+    """阶段⑥：观察池再入场触发检查。"""
+    conn = _conn()
+    today = datetime.today().strftime("%Y-%m-%d")
+    if args.sweep:
+        for note in watch_pool.sweep(conn, today, P):
+            print("  [sweep]", note)
+    items = repo.list_watch(conn, "ACTIVE")
+    if not items:
+        print("[watch] 观察池为空")
+        conn.close()
+        return
+    for it in items:
+        kline = cleaner.clean(cache.load_kline(conn, it["code"], limit=int(P["HISTORY_DAYS"])))
+        r = watch_pool.check_reentry(conn, it, kline, P)
+        mark = "★触发" if r["triggered"] else "休眠"
+        print(f"  {it['code']} 入池{it['entered_date']} 剩余{it['days_remaining']}日 "
+              f"{mark} 位置={r.get('position')} 原因={r['reason']}")
+        if r["triggered"]:
+            repo.trigger_watch(conn, it["id"])
+    conn.close()
+
+
 def cmd_selftest(args):
     """SPEC §11 规则自检（不依赖网络）。"""
     from . import guard
@@ -325,6 +414,76 @@ def cmd_selftest(args):
     check("TC-E 下跌中继不产生候选",
           pr_e["position"] != position.DOWNTREND or m_e.get("trade_type") is None)
 
+    # --- T07/T08：入场单落库、出场引擎、观察池 ---
+    import sqlite3
+
+    from .storage import db as _db
+    from .storage import repo as _repo
+
+    mc = sqlite3.connect(":memory:")
+    mc.row_factory = sqlite3.Row
+    _db.init_db(mc)
+
+    def _kline(closes, start_date="X0000"):
+        s = pd.Series(closes, dtype=float)
+        return pd.DataFrame({
+            "date": [f"X{i:04d}" for i in range(len(s))],
+            "open": s * 0.999, "high": s * 1.004, "low": s * 0.996,
+            "close": s, "vol": pd.Series([3000.0] * len(s)),
+        })
+
+    print("[selftest] 入场单落库（T07）")
+    full = {"code": "600000", "name": "T", "trade_type": "A",
+            "structure_position": "底部反转",
+            "observed_facts": "MACD绿柱连续2日缩短，KDJ低位金叉",
+            "stop_loss_price": 65.0, "first_target_price": 75.0,
+            "remainder_protection": "跌破当日开盘价", "time_stop_days": 3,
+            "self_check_pass": True, "entry_price": 70.0}
+    okf, oid, errs = _repo.save_entry_order(mc, {**full, "first_target_price": None}, P)
+    check("落库：缺项被拒", not okf and any("缺字段" in e for e in errs), errs)
+    okf, oid, errs = _repo.save_entry_order(mc, full, P)
+    check("落库：完整8项通过", okf and oid is not None, errs)
+    _repo.save_exit(mc, oid, datetime.now().isoformat(timespec="seconds"), 80.0,
+                    1, "TAKE_PROFIT", "E-A-2")
+    okf2, _, errs2 = _repo.save_entry_order(mc, {**full, "code": "600001"}, P,
+                                            datetime.now())
+    check("落库：盈利平仓后立即开仓被拒(N6)",
+          not okf2 and any("N6" in e for e in errs2), errs2)
+
+    print("[selftest] 出场引擎（T08）")
+    k_drop = _kline([70.0] * 199 + [60.0])
+    oa = {"id": 1, "trade_type": "A", "stop_loss_price": 65.0,
+          "first_target_price": 75.0, "created_at": "X0190 10:00:00",
+          "entry_price": 70.0}
+    r = exit_engine.evaluate(mc, oa, k_drop, P)
+    check("A类跌破锁定止损 → E-A-1",
+          r["action"] == "EXIT" and r["hit_rule"] == "E-A-1", r)
+
+    k_flat = _kline([50.0] * 200)
+    oc = {"id": 2, "trade_type": "C", "stop_loss_price": 47.53,
+          "first_target_price": 60.0, "created_at": "X0190 10:00:00",
+          "entry_price": 50.0}
+    r = exit_engine.evaluate(mc, oc, k_flat, P)
+    check("C类未破失效价 → 持有（N7：不因KDJ/5日线触发）",
+          r["action"] == "HOLD", r)
+    r = exit_engine.evaluate(mc, oc, _kline([50.0] * 199 + [47.0]), P)
+    check("C类跌破失效价 → E-C-1",
+          r["action"] == "EXIT" and r["hit_rule"] == "E-C-1", r)
+
+    b_tail = [70.0] * 190 + [68, 66, 64, 62, 60, 58, 57, 56, 55, 54]
+    ob = {"id": 3, "trade_type": "B", "stop_loss_price": 60.0,
+          "first_target_price": 90.0, "created_at": "X0190 10:00:00",
+          "entry_price": 70.0}
+    r = exit_engine.evaluate(mc, ob, _kline(b_tail), P)
+    check("B类连续2日收盘破MA5 → E-B-1",
+          r["action"] == "EXIT" and r["hit_rule"] == "E-B-1", r)
+
+    print("[selftest] 观察池（W-*）")
+    t1 = watch_pool.build_trigger("STOP_LOSS", 37.1)
+    check("止损型预写收复价", t1["branch"] == "WRONG_KILL" and t1["recover_price"] == 37.1, t1)
+    t2 = watch_pool.build_trigger("TREND_EXIT")
+    check("趋势型休眠至位置复现", t2["branch"] == "TREND_EXIT", t2)
+
     print(f"\n[selftest] PASS={ok} FAIL={fail}")
     sys.exit(0 if fail == 0 else 1)
 
@@ -357,6 +516,24 @@ def main(argv=None):
     sim = sub.add_parser("simulate", help="离线端到端（合成数据，无需网络）")
     sim.add_argument("--stocks", type=int, default=30)
     sim.set_defaults(func=cmd_simulate)
+
+    o = sub.add_parser("order", help="创建入场单（8 项强制校验）")
+    o.add_argument("--code", required=True)
+    o.add_argument("--type", required=True, choices=["A", "B", "C"])
+    o.add_argument("--stop", type=float, required=True, help="固定止损价（写死的数字）")
+    o.add_argument("--target", type=float, required=True, help="第一目标价")
+    o.add_argument("--facts", default="", help="观察到的事实（禁写预测）")
+    o.add_argument("--entry-price", type=float, default=None)
+    o.add_argument("--position", default=None, help="结构位置（默认取扫描结果）")
+    o.set_defaults(func=cmd_order)
+
+    m = sub.add_parser("monitor", help="持仓出场判定")
+    m.add_argument("--confirm", action="store_true", help="执行出场并写入观察池")
+    m.set_defaults(func=cmd_monitor)
+
+    w = sub.add_parser("watch", help="观察池检查")
+    w.add_argument("--sweep", action="store_true", help="执行到期清理")
+    w.set_defaults(func=cmd_watch)
 
     args = ap.parse_args(argv)
     args.func(args)

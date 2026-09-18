@@ -47,11 +47,19 @@ def upsert_kline(conn: sqlite3.Connection, code: str, df: pd.DataFrame, adjust: 
 
 
 def load_kline(conn: sqlite3.Connection, code: str, limit: Optional[int] = None) -> pd.DataFrame:
-    sql = ("SELECT date,open,high,low,close,vol FROM daily_kline "
-           "WHERE code=? ORDER BY date")
+    """读取日线，按日期升序返回。
+
+    注意：limit 指"最近 N 条"，不能写成 `ORDER BY date LIMIT N`（那会取最早的 N 条）。
+    """
     if limit:
-        sql += f" LIMIT {int(limit)}"
-    df = pd.read_sql_query(sql, conn, params=(code,))
+        sql = ("SELECT date,open,high,low,close,vol FROM ("
+               "SELECT date,open,high,low,close,vol FROM daily_kline "
+               "WHERE code=? ORDER BY date DESC LIMIT ?) ORDER BY date")
+        df = pd.read_sql_query(sql, conn, params=(code, int(limit)))
+    else:
+        sql = ("SELECT date,open,high,low,close,vol FROM daily_kline "
+               "WHERE code=? ORDER BY date")
+        df = pd.read_sql_query(sql, conn, params=(code,))
     if not df.empty:
         for c in ("open", "high", "low", "close", "vol"):
             df[c] = pd.to_numeric(df[c], errors="coerce")
