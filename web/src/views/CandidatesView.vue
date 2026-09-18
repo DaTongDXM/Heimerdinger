@@ -34,8 +34,13 @@ const GROUP_LABELS: Record<string, string> = {
   V: 'V 型标记（仓位强制减半）',
 }
 
+/** 扫描中用实时候选流，结束后用最终清单 */
+const displayList = computed<Candidate[]>(() =>
+  scanning.value ? (progress.value?.candidates ?? []) : (props.cand?.candidates ?? []),
+)
+
 const groups = computed(() => {
-  const list = props.cand?.candidates ?? []
+  const list = displayList.value
   const out: { type: string; label: string; rows: Candidate[] }[] = []
   for (const t of ['A', 'B', 'C']) {
     const rows = list.filter((c) => c.type === t && !c.halved)
@@ -133,12 +138,12 @@ onBeforeUnmount(() => {
 
     <div class="summary">
       <div class="stat">
-        <div class="num">{{ cand?.total ?? 0 }}</div>
-        <div class="lbl">扫描总数</div>
+        <div class="num">{{ scanning ? (progress?.total ?? 0) : (cand?.total ?? 0) }}</div>
+        <div class="lbl">{{ scanning ? '扫描总数(进行中)' : '扫描总数' }}</div>
       </div>
       <div class="stat">
-        <div class="num pos-up">{{ (cand?.candidates ?? []).length }}</div>
-        <div class="lbl">候选</div>
+        <div class="num pos-up">{{ displayList.length }}</div>
+        <div class="lbl">{{ scanning ? '已发现候选' : '候选' }}</div>
       </div>
       <div v-for="(v, k) in cand?.counts ?? {}" :key="k" class="stat">
         <div class="num" :class="k === 'DOWNTREND_CONTINUATION' ? 'pos-down' : ''">{{ v }}</div>
@@ -191,7 +196,11 @@ onBeforeUnmount(() => {
   </div>
 
   <el-empty
-    v-if="cand && !cand.candidates.length"
-    description="今日无候选（先运行 python -m timoo.cli scan）"
+    v-if="!scanning && cand && !cand.candidates.length"
+    description="今日无候选（先运行扫描）"
+  />
+  <el-empty
+    v-if="scanning && !displayList.length"
+    description="扫描进行中，候选出现后将实时显示在这里…"
   />
 </template>

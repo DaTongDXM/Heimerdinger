@@ -129,4 +129,6 @@ export interface ScanProgress {
     output: string
   } | null
   error: string | null
+  /** 扫描过程中实时产出的候选（仅 running 时有意义） */
+  candidates?: Candidate[]
 }

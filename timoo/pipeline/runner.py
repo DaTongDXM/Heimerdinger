@@ -14,6 +14,7 @@ from . import cache, cleaner, matcher, position, signal, universe
 ROOT = Path(__file__).resolve().parents[2]
 
 ProgressFn = Callable[[str, int, int], None]
+CandidateFn = Callable[[dict], None]
 
 
 def _write_candidates(scan_date: str, pv: str, counts: dict, total: int,
@@ -29,12 +30,17 @@ def _write_candidates(scan_date: str, pv: str, counts: dict, total: int,
 
 
 def run_pipeline(conn, items: List[Tuple[str, str]], today: str, params: Params,
-                 progress: Optional[ProgressFn] = None):
+                 progress: Optional[ProgressFn] = None,
+                 on_candidate: Optional[CandidateFn] = None):
     """核心流水线 ②→④：位置分类（硬过滤）→ 信号筛选 → 类型匹配。
 
     items: [(code, name), ...]；日线直接从库里读，不做网络请求。
+    on_candidate: 每发现一只候选立即回调（供 UI 实时上屏）。
     """
     pv = db.record_param_version(conn, params)
+    # 同日重跑先清掉旧结果，避免残留过期行
+    conn.execute("DELETE FROM scan_result WHERE scan_date=?", (today,))
+    conn.commit()
     counts: dict = {}
     candidates: list = []
     total = len(items)
@@ -69,7 +75,7 @@ def run_pipeline(conn, items: List[Tuple[str, str]], today: str, params: Params,
                  pr.get("platform_top"), pr.get("platform_bottom"),
                  pr.get("ma20"), pr.get("prev_close"), pv))
             if is_cand:
-                candidates.append({
+                cand = {
                     "code": code, "name": name, "type": m["trade_type"],
                     "position": p, "halved": m.get("halved", False),
                     "signal": sr.get("level"), "signal_detail": sr.get("detail"),
@@ -77,17 +83,24 @@ def run_pipeline(conn, items: List[Tuple[str, str]], today: str, params: Params,
                     "ref_platform_bottom": pr.get("platform_bottom"),
                     "ref_ma20": pr.get("ma20"), "ref_prev_close": pr.get("prev_close"),
                     "add_plan": m.get("add_plan"),
-                })
+                }
+                candidates.append(cand)
+                if on_candidate:
+                    try:
+                        on_candidate(cand)
+                    except Exception:  # noqa: BLE001 - 回调失败不影响扫描
+                        pass
         if progress and (i % 20 == 0 or i == total):
             progress("扫描", i, total)
-        if i % 200 == 0:
+        if i % 20 == 0:
             conn.commit()
     conn.commit()
     return pv, counts, candidates
 
 
 def run_full(params: Params, progress: Optional[ProgressFn] = None,
-             skip_fetch: bool = False) -> Dict:
+             skip_fetch: bool = False,
+             on_candidate: Optional[CandidateFn] = None) -> Dict:
     """完整流程：universe 重判 → 日线增量更新 → 扫描 → 候选清单落盘。
 
     skip_fetch=True 时只重算扫描（用本地已有日线，无网络请求，秒级完成）。
@@ -139,7 +152,9 @@ def run_full(params: Params, progress: Optional[ProgressFn] = None,
                                           ensure_ascii=False, indent=2), encoding="utf-8")
 
         # --- ③④ 扫描 ---
-        pv, counts, candidates = run_pipeline(conn, items, today, params, progress=progress)
+        pv, counts, candidates = run_pipeline(conn, items, today, params,
+                                              progress=progress,
+                                              on_candidate=on_candidate)
         out = _write_candidates(today, pv, counts, len(items), candidates)
         return {
             "scan_date": today,

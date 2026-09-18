@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api")
 _scan_state: dict = {
     "running": False, "phase": "", "current": 0, "total": 0,
     "started_at": None, "finished_at": None, "result": None, "error": None,
+    "candidates": [],
 }
 
 
@@ -35,12 +36,17 @@ def _scan_worker(skip_fetch: bool) -> None:
     def prog(phase: str, current: int, total: int) -> None:
         _scan_state.update(phase=phase, current=current, total=total)
 
+    def on_cand(c: dict) -> None:
+        # 候选实时上屏：直接换新列表，避免读端拿到半更新引用
+        _scan_state["candidates"] = _scan_state["candidates"] + [c]
+
     _scan_state.update(running=True, phase="启动", current=0, total=0,
-                       error=None, result=None,
+                       error=None, result=None, candidates=[],
                        started_at=datetime.now().isoformat(timespec="seconds"),
                        finished_at=None)
     try:
-        res = runner.run_full(P, progress=prog, skip_fetch=skip_fetch)
+        res = runner.run_full(P, progress=prog, skip_fetch=skip_fetch,
+                              on_candidate=on_cand)
         _scan_state.update(phase="完成", result=res)
     except Exception as e:  # noqa: BLE001 - 后台线程必须吞异常并回传
         _scan_state.update(phase="失败", error=f"{type(e).__name__}: {e}")
