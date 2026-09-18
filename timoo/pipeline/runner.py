@@ -110,6 +110,7 @@ def run_full(params: Params, progress: Optional[ProgressFn] = None,
     today = datetime.today().strftime("%Y-%m-%d")
     try:
         items: List[Tuple[str, str]] = []
+        fetch_stats: Dict = {"skipped": True}
         if skip_fetch:
             # 仅重算：完全离线，用本地最近一次 universe + 已有日线
             rows = conn.execute(
@@ -125,9 +126,28 @@ def run_full(params: Params, progress: Optional[ProgressFn] = None,
                 progress("构建universe", 0, 0)
             spot = universe.fetch_spot()
             uni = universe.build_universe(spot)
+            kept0 = uni[uni["in_universe"] == 1]
+            fetch_codes = kept0["code"].tolist()
+
+            # --- ② 日线增量：必须先下载，再按真实K线长度判次新股（U-3）。
+            # 顺序不能反：无K线 ≠ 次新股（首次建库时全市场都没有K线），
+            # 先判会把整个 universe 误剔除（2026-09-18 实证：4414→23）。
+            def _fp(i, total, status):
+                if progress:
+                    progress("更新日线", i, total)
+
+            fetch_stats = cache.fetch_all(conn, fetch_codes, params, progress=_fp)
+            if fetch_stats.get("failed_codes"):
+                out = ROOT / "data" / "failed" / f"{today}.json"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(fetch_stats["failed_codes"],
+                                          ensure_ascii=False, indent=2), encoding="utf-8")
+
             lens = cache.kline_lengths(conn)
             if lens:
                 uni = universe.mark_new_stocks(uni, lens, int(params["NEW_STOCK_MIN_DAYS"]))
+            # 同日重跑先清旧快照，避免残留（如历史 SIM 行）
+            conn.execute("DELETE FROM universe_snapshot WHERE date=?", (today,))
             snap = [(today, r["code"], r["name"], int(r["in_universe"]), r["exclude_reason"])
                     for _, r in uni.iterrows()]
             conn.executemany(
@@ -136,20 +156,6 @@ def run_full(params: Params, progress: Optional[ProgressFn] = None,
             conn.commit()
             kept = uni[uni["in_universe"] == 1]
             items = list(zip(kept["code"].tolist(), kept["name"].tolist()))
-
-        # --- ② 日线增量 ---
-        fetch_stats: Dict = {"skipped": True}
-        if not skip_fetch:
-            def _fp(i, total, status):
-                if progress:
-                    progress("更新日线", i, total)
-
-            fetch_stats = cache.fetch_all(conn, [c for c, _ in items], params, progress=_fp)
-            if fetch_stats.get("failed_codes"):
-                out = ROOT / "data" / "failed" / f"{today}.json"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(json.dumps(fetch_stats["failed_codes"],
-                                          ensure_ascii=False, indent=2), encoding="utf-8")
 
         # --- ③④ 扫描 ---
         pv, counts, candidates = run_pipeline(conn, items, today, params,
