@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>timoo · 短线交易纪律执行系统</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.7.0/dist/index.css">
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.7.0/dist/index.full.min.js"></script>
+<style>
+  body { margin: 0; background: #f5f7fa; font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .topbar { background: #1f2d3d; color: #fff; padding: 0 24px; display: flex; align-items: center; height: 56px; gap: 32px; }
+  .topbar .brand { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+  .topbar .status { margin-left: auto; font-size: 12px; color: #c0c4cc; }
+  .container { max-width: 1280px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 6px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .card h3 { margin: 0 0 12px; font-size: 15px; color: #303133; }
+  .summary { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { min-width: 130px; background: #f8f9fb; border-radius: 6px; padding: 12px 16px; }
+  .stat .num { font-size: 24px; font-weight: 700; }
+  .stat .lbl { font-size: 12px; color: #909399; margin-top: 2px; }
+  .pos-up { color: #d93026; } .pos-down { color: #1a9e42; }
+  .muted { color: #909399; font-size: 12px; }
+  .tagA { color: #e6a23c; font-weight: 600; } .tagB { color: #409eff; font-weight: 600; }
+  .tagC { color: #909399; font-weight: 600; } .tagV { color: #d93026; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <span class="brand">timoo</span>
+    <el-menu :default-active="tab" mode="horizontal" background-color="#1f2d3d" text-color="#cfd8e3"
+             active-text-color="#ffffff" @select="t => tab = t" style="border-bottom:none;">
+      <el-menu-item index="candidates">候选池</el-menu-item>
+      <el-menu-item index="order">入场单</el-menu-item>
+      <el-menu-item index="holdings">持仓</el-menu-item>
+      <el-menu-item index="watch">观察池</el-menu-item>
+      <el-menu-item index="stats">复盘</el-menu-item>
+    </el-menu>
+    <span class="status">{{ statusLine }}</span>
+  </div>
+
+  <div class="container">
+    <!-- 候选池 -->
+    <div v-if="tab==='candidates'">
+      <div class="card">
+        <h3>扫描摘要 · {{ cand.scan_date || '—' }}</h3>
+        <div class="summary">
+          <div class="stat"><div class="num">{{ cand.total || 0 }}</div><div class="lbl">扫描总数</div></div>
+          <div class="stat"><div class="num pos-up">{{ (cand.candidates||[]).length }}</div><div class="lbl">候选</div></div>
+          <div class="stat" v-for="(v,k) in cand.counts" :key="k">
+            <div class="num" :class="k==='DOWNTREND_CONTINUATION' ? 'pos-down' : ''">{{ v }}</div>
+            <div class="lbl">{{ posName(k) }}</div>
+          </div>
+        </div>
+        <div class="muted" style="margin-top:10px">下跌中继已在阶段②硬过滤，不进入信号计算。</div>
+      </div>
+      <div class="card" v-for="g in groups" :key="g.type">
+        <h3>{{ g.label }}（{{ g.rows.length }}）<span class="muted" style="margin-left:8px">{{ g.desc }}</span></h3>
+        <el-table :data="g.rows" size="small" border>
+          <el-table-column prop="code" label="代码" width="90" />
+          <el-table-column prop="name" label="名称" width="140" />
+          <el-table-column label="位置" width="110">
+            <template #default="s">{{ posName(s.row.position) }}</template>
+          </el-table-column>
+          <el-table-column label="信号" width="90">
+            <template #default="s">
+              <span v-if="s.row.signal==='NONE'" class="muted">无（C类不等信号）</span>
+              <span v-else class="pos-up">{{ s.row.signal }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="建议关注位">
+            <template #default="s">
+              <span v-if="s.row.ref_platform_top">平台上沿 {{ fix2(s.row.ref_platform_top) }} / </span>
+              <span v-if="s.row.ref_ma20">MA20 {{ fix2(s.row.ref_ma20) }} / </span>
+              <span>前日收盘 {{ fix2(s.row.ref_prev_close) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="加仓计划" width="200">
+            <template #default="s">
+              <span v-if="s.row.add_plan" class="muted">
+                失效价 {{ fix2(s.row.add_plan.invalidate_price) }}；加仓 {{ (s.row.add_plan.add_prices||[]).map(fix2).join(' / ') }}
+              </span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column width="120" label="操作">
+            <template #default="s">
+              <el-button size="small" type="primary" plain @click="toOrder(s.row)">填入场单</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <el-empty v-if="cand.candidates && !cand.candidates.length" description="今日无候选" />
+    </div>
+
+    <!-- 入场单 -->
+    <div v-if="tab==='order'">
+      <div class="card">
+        <h3>入场单（8 项强制校验，缺一项不开仓）</h3>
+        <el-form :model="form" label-width="130px" style="max-width:640px">
+          <el-form-item label="股票代码" required>
+            <el-input v-model="form.code" placeholder="如 600000" style="width:200px" />
+          </el-form-item>
+          <el-form-item label="0. 交易类型" required>
+            <el-radio-group v-model="form.trade_type">
+              <el-radio-button value="A">A 短线动量</el-radio-button>
+              <el-radio-button value="B">B 波段跟随</el-radio-button>
+              <el-radio-button value="C">C 左侧分批</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="3. 固定止损价" required>
+            <el-input-number v-model="form.stop_loss_price" :precision="2" :controls="false" style="width:200px" />
+            <span class="muted" style="margin-left:8px">A=前日收盘价；C=平台下沿×0.98</span>
+          </el-form-item>
+          <el-form-item label="4. 第一目标价" required>
+            <el-input-number v-model="form.first_target_price" :precision="2" :controls="false" style="width:200px" />
+            <span class="muted" style="margin-left:8px">结构位（前高/平台上沿），到位减半</span>
+          </el-form-item>
+          <el-form-item label="入场价（参考）">
+            <el-input-number v-model="form.entry_price" :precision="2" :controls="false" style="width:200px" />
+          </el-form-item>
+          <el-form-item label="2. 观察到的事实" required>
+            <el-input v-model="form.observed_facts" type="textarea" :rows="2"
+              placeholder="只写观察，禁写预测（含'即将/预计/大概率'会被拒绝）" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="submitOrder">提交入场单</el-button>
+          </el-form-item>
+        </el-form>
+        <el-alert type="info" :closable="false"
+          title="第 1/5/6 项（结构位置、剩余仓位保护线、时间止损）由系统按类型自动锁定；第 7 项自检（盈利后 30 分钟冷却）由系统强制执行。" />
+      </div>
+      <div class="card">
+        <h3>已保存入场单（append-only，不可修改）</h3>
+        <el-table :data="orders" size="small" border>
+          <el-table-column prop="id" label="#" width="50" />
+          <el-table-column prop="code" label="代码" width="90" />
+          <el-table-column prop="name" label="名称" width="130" />
+          <el-table-column prop="trade_type" label="类型" width="60" />
+          <el-table-column prop="stop_loss_price" label="止损价" width="90" />
+          <el-table-column prop="first_target_price" label="目标价" width="90" />
+          <el-table-column prop="time_stop_days" label="时间止损" width="80" />
+          <el-table-column prop="status" label="状态" width="80" />
+          <el-table-column prop="created_at" label="创建时间" />
+        </el-table>
+      </div>
+    </div>
+
+    <!-- 持仓 -->
+    <div v-if="tab==='holdings'">
+      <div class="card">
+        <h3>持仓监控（按入场时锁定的规则判定，输出次日动作）</h3>
+        <el-table :data="holdings" size="small" border>
+          <el-table-column label="#" width="50">
+            <template #default="s">{{ s.row.order.id }}</template>
+          </el-table-column>
+          <el-table-column label="代码" width="90">
+            <template #default="s">{{ s.row.order.code }}</template>
+          </el-table-column>
+          <el-table-column label="名称" width="130">
+            <template #default="s">{{ s.row.order.name }}</template>
+          </el-table-column>
+          <el-table-column label="类型" width="60">
+            <template #default="s">{{ s.row.order.trade_type }}</template>
+          </el-table-column>
+          <el-table-column label="当前动作" width="100">
+            <template #default="s">
+              <el-tag :type="actTag(s.row.action.action)" effect="dark">{{ actName(s.row.action.action) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="规则" width="90">
+            <template #default="s">{{ s.row.action.hit_rule || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="明细">
+            <template #default="s">
+              <span class="muted">收盘 {{ fix2(s.row.action.detail.close) }} · 持有 {{ s.row.action.detail.hold_days }} 日 ·
+                {{ s.row.action.detail.next || '继续持有' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="110">
+            <template #default="s">
+              <el-button size="small" type="danger" plain
+                :disabled="s.row.action.action!=='EXIT' && s.row.action.action!=='REDUCE_HALF'"
+                @click="confirmExit(s.row.order.id)">确认执行</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!holdings.length" description="无持仓" />
+      </div>
+    </div>
+
+    <!-- 观察池 -->
+    <div v-if="tab==='watch'">
+      <div class="card">
+        <h3>观察池（出场后强制入池，20 个交易日无触发自动清除）</h3>
+        <el-table :data="watch" size="small" border>
+          <el-table-column prop="code" label="代码" width="100" />
+          <el-table-column prop="source_exit_type" label="出场类型" width="120" />
+          <el-table-column label="再入场触发" min-width="280">
+            <template #default="s">{{ trigText(s.row.reentry_trigger) }}</template>
+          </el-table-column>
+          <el-table-column prop="entered_date" label="入池日期" width="110" />
+          <el-table-column label="剩余观察" width="100">
+            <template #default="s">
+              <el-tag :type="s.row.days_remaining <= 5 ? 'danger' : 'info'">{{ s.row.days_remaining }} 日</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" width="90" />
+        </el-table>
+        <el-empty v-if="!watch.length" description="观察池为空" />
+      </div>
+    </div>
+
+    <!-- 复盘 -->
+    <div v-if="tab==='stats'">
+      <div class="card">
+        <h3>本月复盘 · {{ stats.month }}</h3>
+        <div class="summary">
+          <div class="stat"><div class="num">{{ stats.total_exits || 0 }}</div><div class="lbl">出场笔数</div></div>
+          <div class="stat"><div class="num pos-up">{{ stats.par == null ? '—' : (stats.par*100).toFixed(0) + '%' }}</div><div class="lbl">计划执行率 PAR（北极星）</div></div>
+          <div class="stat" style="min-width:260px">
+            <div style="font-size:13px;margin-bottom:6px">参数调优样本门禁：{{ gate.current }} / {{ gate.required }}</div>
+            <el-progress :percentage="Math.min(100, Math.round(gate.current/gate.required*100))"
+              :status="gate.unlocked ? 'success' : 'warning'" />
+            <div class="muted" style="margin-top:4px">{{ gate.unlocked ? '已解锁（仍需先回测）' : '样本不足，禁止调参' }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>分类型统计</h3>
+        <el-table :data="byTypeRows" size="small" border>
+          <el-table-column prop="t" label="类型" width="80" />
+          <el-table-column prop="trades" label="笔数" width="80" />
+          <el-table-column label="胜率" width="100">
+            <template #default="s">{{ s.row.win_rate == null ? '—' : (s.row.win_rate*100).toFixed(0) + '%' }}</template>
+          </el-table-column>
+          <el-table-column label="平均盈亏">
+            <template #default="s">
+              <span :class="s.row.avg_pnl > 0 ? 'pos-up' : 'pos-down'">
+                {{ s.row.avg_pnl == null ? '—' : (s.row.avg_pnl*100).toFixed(2) + '%' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <div class="card">
+        <h3>违规记录（N1-N8）</h3>
+        <el-table :data="violations" size="small" border>
+          <el-table-column prop="date" label="日期" width="110" />
+          <el-table-column prop="rule_id" label="规则" width="80" />
+          <el-table-column prop="code" label="代码" width="100" />
+          <el-table-column prop="detail" label="详情" />
+        </el-table>
+        <el-empty v-if="!violations.length" description="无违规记录" />
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, reactive, ref, computed, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const tab = ref('candidates');
+    const cand = reactive({ scan_date: null, total: 0, counts: {}, candidates: [] });
+    const orders = ref([]);
+    const holdings = ref([]);
+    const watch = ref([]);
+    const stats = reactive({ month: null, total_exits: 0, par: null, by_type: {} });
+    const violations = ref([]);
+    const form = reactive({ code: '', trade_type: 'A', stop_loss_price: null,
+      first_target_price: null, entry_price: null, observed_facts: '' });
+
+    async function jget(url) {
+      const r = await fetch(url);
+      return r.json();
+    }
+
+    async function loadCandidates() {
+      const r = await jget('/api/candidates');
+      if (r.code === 200) Object.assign(cand, r.data);
+      else { const s = await jget('/api/scan/result'); if (s.code === 200) {
+        cand.scan_date = s.data.scan_date; cand.total = s.data.rows.length;
+        cand.counts = s.data.counts; cand.candidates = []; } }
+    }
+    async function loadOrders() { const r = await jget('/api/entry-orders'); orders.value = r.code===200 ? r.data : []; }
+    async function loadHoldings() { const r = await jget('/api/holdings'); holdings.value = r.code===200 ? r.data : []; }
+    async function loadWatch() { const r = await jget('/api/watch-pool'); watch.value = r.code===200 ? r.data : []; }
+    async function loadStats() {
+      const r = await jget('/api/stats/monthly'); if (r.code === 200) Object.assign(stats, r.data);
+      const v = await jget('/api/violations'); violations.value = v.code===200 ? v.data : [];
+    }
+
+    function refreshAll() {
+      loadCandidates(); loadOrders(); loadHoldings(); loadWatch(); loadStats();
+    }
+
+    const groups = computed(() => {
+      const map = { A: 'A 类 · 短线动量（1-3日，单层）', B: 'B 类 · 波段跟随（5-20日，回踩加仓）', C: 'C 类 · 左侧分批（20-60日，不等信号）' };
+      const out = [];
+      for (const t of ['A', 'B', 'C']) {
+        const rows = (cand.candidates || []).filter(c => c.type === t && !c.halved);
+        if (rows.length) out.push({ type: t, label: map[t], desc: '', rows });
+      }
+      const v = (cand.candidates || []).filter(c => c.halved);
+      if (v.length) out.push({ type: 'V', label: 'V 型标记（仓位强制减半）', desc: '', rows: v });
+      return out;
+    });
+
+    const gate = computed(() => stats.sample_gate || { current: 0, required: 20, unlocked: false });
+    const byTypeRows = computed(() => Object.entries(stats.by_type || {}).map(([t, d]) => ({ t, ...d })));
+    const statusLine = computed(() => {
+      const n = (cand.candidates || []).length, h = holdings.value.length, w = watch.value.length;
+      return `候选 ${n} · 持仓 ${h} · 观察 ${w} · 违规 ${violations.value.length}`;
+    });
+
+    function posName(p) {
+      return { BOTTOM_REVERSAL: '底部反转', PULLBACK_UPTREND: '多头回踩',
+               DOWNTREND_CONTINUATION: '下跌中继', V_SHAPE: 'V型', OTHER: '未分类' }[p] || p;
+    }
+    function actName(a) { return { HOLD: '持有', EXIT: '离场', REDUCE_HALF: '减半', CONVERT_TO_B: '转B类' }[a] || a; }
+    function actTag(a) { return { HOLD: 'info', EXIT: 'danger', REDUCE_HALF: 'warning' }[a] || 'info'; }
+    function fix2(v) { return v == null ? '—' : Number(v).toFixed(2); }
+    function trigText(t) {
+      if (!t || typeof t === 'string') return t || '—';
+      return t.rule || '—';
+    }
+
+    function toOrder(row) {
+      form.code = row.code; form.trade_type = row.type;
+      if (row.add_plan) form.stop_loss_price = Number(row.add_plan.invalidate_price);
+      if (row.ref_platform_top) form.first_target_price = Number(row.ref_platform_top);
+      if (row.ref_prev_close) form.entry_price = Number(row.ref_prev_close);
+      tab.value = 'order';
+      ElementPlus.ElMessage.info(`已带入 ${row.code}（${row.type} 类），请核对止损/目标价后提交`);
+    }
+
+    async function submitOrder() {
+      const r = await fetch('/api/entry-order', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      }).then(x => x.json());
+      if (r.code === 200) {
+        ElementPlus.ElMessage.success(`入场单 #${r.data.id} 已保存（append-only）`);
+        form.observed_facts = ''; loadOrders(); loadHoldings();
+      } else {
+        ElementPlus.ElMessage.error(r.message);
+      }
+    }
+
+    async function confirmExit(id) {
+      const r = await fetch(`/api/holdings/${id}/exit`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      }).then(x => x.json());
+      if (r.code === 200) {
+        ElementPlus.ElMessage.success(r.data.exited ? '已离场并入观察池' : '已减半，剩余仓位按保护线管理');
+        loadHoldings(); loadWatch(); loadStats();
+      } else {
+        ElementPlus.ElMessage.error(r.message);
+      }
+    }
+
+    onMounted(refreshAll);
+    return { tab, cand, orders, holdings, watch, stats, violations, form,
+             groups, gate, byTypeRows, statusLine, posName, actName, actTag,
+             fix2, trigText, toOrder, submitOrder, confirmExit };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>
