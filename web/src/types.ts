@@ -112,3 +112,21 @@ export interface Violation {
   code: string | null
   detail: string | null
 }
+
+export interface ScanProgress {
+  running: boolean
+  phase: string
+  current: number
+  total: number
+  started_at: string | null
+  finished_at: string | null
+  result: {
+    scan_date: string
+    universe: number
+    failed_count: number
+    counts: Record<string, number>
+    candidates: number
+    output: string
+  } | null
+  error: string | null
+}

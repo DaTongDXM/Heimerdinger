@@ -77,7 +77,7 @@ onMounted(refresh)
   </div>
 
   <div class="container">
-    <CandidatesView v-if="tab === 'candidates'" :cand="cand" @to-order="onToOrder" />
+    <CandidatesView v-if="tab === 'candidates'" :cand="cand" @to-order="onToOrder" @refresh="refresh" />
     <OrderView v-if="tab === 'order'" :orders="orders" :prefill="prefill" @refresh="refresh" />
     <HoldingsView v-if="tab === 'holdings'" :holdings="holdings" @refresh="refresh" />
     <WatchView v-if="tab === 'watch'" :watch="watch" />

@@ -3,6 +3,7 @@ import type {
   CandidatesResp,
   EntryOrder,
   HoldingItem,
+  ScanProgress,
   StatsResp,
   Violation,
   WatchItem,
@@ -32,6 +33,12 @@ export interface OrderFormPayload {
 }
 
 export const api = {
+  triggerScan: (skipFetch = false) =>
+    jpost<{ started: boolean; skip_fetch: boolean }>('/api/scan/run', { skip_fetch: skipFetch }),
+
+  getScanProgress: () =>
+    jget<ScanProgress>('/api/scan/progress'),
+
   getCandidates: () => jget<CandidatesResp>('/api/candidates'),
 
   getOrders: (status = 'OPEN') =>

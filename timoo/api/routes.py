@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -14,12 +15,52 @@ import pandas as pd
 from fastapi import APIRouter
 
 from ..config import DEFAULT as P
-from ..pipeline import cleaner, entry_order, exit_engine, watch_pool
+from ..pipeline import cleaner, entry_order, exit_engine, runner, watch_pool
 from ..storage import db, repo
 from ..pipeline import cache as kcache
 
 ROOT = Path(__file__).resolve().parents[2]
 router = APIRouter(prefix="/api")
+
+# ---------------------------------------------------------------------------
+# 扫描任务（后台线程 + 轮询进度）
+# ---------------------------------------------------------------------------
+_scan_state: dict = {
+    "running": False, "phase": "", "current": 0, "total": 0,
+    "started_at": None, "finished_at": None, "result": None, "error": None,
+}
+
+
+def _scan_worker(skip_fetch: bool) -> None:
+    def prog(phase: str, current: int, total: int) -> None:
+        _scan_state.update(phase=phase, current=current, total=total)
+
+    _scan_state.update(running=True, phase="启动", current=0, total=0,
+                       error=None, result=None,
+                       started_at=datetime.now().isoformat(timespec="seconds"),
+                       finished_at=None)
+    try:
+        res = runner.run_full(P, progress=prog, skip_fetch=skip_fetch)
+        _scan_state.update(phase="完成", result=res)
+    except Exception as e:  # noqa: BLE001 - 后台线程必须吞异常并回传
+        _scan_state.update(phase="失败", error=f"{type(e).__name__}: {e}")
+    finally:
+        _scan_state.update(running=False,
+                           finished_at=datetime.now().isoformat(timespec="seconds"))
+
+
+@router.post("/scan/run")
+def trigger_scan(body: dict = None):
+    if _scan_state["running"]:
+        return err("扫描正在进行中")
+    skip_fetch = bool((body or {}).get("skip_fetch", False))
+    threading.Thread(target=_scan_worker, args=(skip_fetch,), daemon=True).start()
+    return ok({"started": True, "skip_fetch": skip_fetch})
+
+
+@router.get("/scan/progress")
+def scan_progress():
+    return ok(dict(_scan_state))
 
 
 def _conn():

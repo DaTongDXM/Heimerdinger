@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { Candidate, CandidatesResp, Position } from '../types'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { api } from '../api'
+import type { Candidate, CandidatesResp, Position, ScanProgress } from '../types'
 
 const props = defineProps<{ cand: CandidatesResp | null }>()
-const emit = defineEmits<{ (e: 'to-order', row: Candidate): void }>()
+const emit = defineEmits<{ (e: 'to-order', row: Candidate): void; (e: 'refresh'): void }>()
+
+const scanning = ref(false)
+const progress = ref<ScanProgress | null>(null)
+let timer: number | null = null
 
 const POS_NAME: Record<Position, string> = {
   BOTTOM_REVERSAL: '底部反转',
@@ -39,11 +45,92 @@ const groups = computed(() => {
   if (v.length) out.push({ type: 'V', label: GROUP_LABELS.V, rows: v })
   return out
 })
+
+const progressPct = computed(() => {
+  const p = progress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.round((p.current / p.total) * 100))
+})
+
+// --- 手动触发扫描 ---
+async function poll() {
+  const r = await api.getScanProgress()
+  if (r.code !== 200) return
+  progress.value = r.data
+  if (r.data.running) {
+    timer = window.setTimeout(poll, 2000)
+    return
+  }
+  scanning.value = false
+  if (r.data.error) {
+    ElMessage.error(`扫描失败：${r.data.error}`)
+  } else if (r.data.result) {
+    const res = r.data.result
+    ElMessage.success(`扫描完成：universe ${res.universe} 只，候选 ${res.candidates} 只` +
+      (res.failed_count ? `（${res.failed_count} 只拉取失败，见失败清单）` : ''))
+    emit('refresh')
+  }
+}
+
+async function startScan(skipFetch: boolean) {
+  const r = await api.triggerScan(skipFetch)
+  if (r.code !== 200) {
+    ElMessage.error(r.message)
+    return
+  }
+  scanning.value = true
+  progress.value = { running: true, phase: '启动', current: 0, total: 0,
+    started_at: null, finished_at: null, result: null, error: null }
+  ElMessage.info(skipFetch ? '正在用本地数据重算扫描…' : '已触发扫描（含日线增量更新，约 10-25 分钟）')
+  poll()
+}
+
+onMounted(() => {
+  // 页面加载时若已有扫描在跑，恢复进度显示
+  api.getScanProgress().then((r) => {
+    if (r.code === 200 && r.data.running) {
+      scanning.value = true
+      progress.value = r.data
+      poll()
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  if (timer) window.clearTimeout(timer)
+})
 </script>
 
 <template>
   <div class="card">
-    <h3>扫描摘要 · {{ cand?.scan_date ?? '—' }}</h3>
+    <h3 style="display: flex; align-items: center; gap: 12px">
+      <span>扫描摘要 · {{ cand?.scan_date ?? '—' }}</span>
+      <span style="margin-left: auto; display: flex; gap: 8px">
+        <el-button
+          size="small"
+          type="primary"
+          :loading="scanning"
+          @click="startScan(false)"
+        >
+          {{ scanning ? '扫描中…' : '运行扫描' }}
+        </el-button>
+        <el-button size="small" :disabled="scanning" @click="startScan(true)">
+          仅重算（本地数据）
+        </el-button>
+      </span>
+    </h3>
+
+    <div v-if="scanning && progress" style="margin-bottom: 14px">
+      <el-progress
+        :percentage="progressPct"
+        :status="progress.phase === '失败' ? 'exception' : undefined"
+      />
+      <div class="muted" style="margin-top: 4px">
+        {{ progress.phase }} {{ progress.total ? `· ${progress.current}/${progress.total}` : '' }}
+        <template v-if="progress.phase === '更新日线'">（增量更新，每只限速 0.3-0.5s）</template>
+      </div>
+    </div>
+
     <div class="summary">
       <div class="stat">
         <div class="num">{{ cand?.total ?? 0 }}</div>

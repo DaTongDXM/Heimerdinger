@@ -20,7 +20,7 @@ import pandas as pd
 
 from .config import DEFAULT as P
 from .pipeline import (cache, cleaner, entry_order, exit_engine, matcher,
-                       position, signal, universe, watch_pool)
+                       position, runner, signal, universe, watch_pool)
 from .storage import db, repo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,73 +85,6 @@ def cmd_fetch(args):
     conn.close()
 
 
-def _write_candidates(scan_date: str, pv: str, counts: dict, total: int,
-                      candidates: list, suffix: str = "") -> Path:
-    out_dir = ROOT / "data" / "candidates"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{scan_date}{suffix}.json"
-    out.write_text(json.dumps({
-        "scan_date": scan_date, "param_version": pv,
-        "counts": counts, "total": total, "candidates": candidates,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    return out
-
-
-def run_pipeline(conn, items, today: str, params):
-    """核心流水线 ②→④：位置分类（硬过滤）→ 信号筛选 → 类型匹配。
-
-    items: [(code, name), ...]；日线直接从库里读，不做网络请求。
-    """
-    pv = db.record_param_version(conn, params)
-    counts: dict = {}
-    candidates: list = []
-    for i, (code, name) in enumerate(items, 1):
-        kline = cleaner.clean(cache.load_kline(conn, code, limit=int(params["HISTORY_DAYS"])))
-        if len(kline) < int(params["NEW_STOCK_MIN_DAYS"]):
-            counts["insufficient"] = counts.get("insufficient", 0) + 1
-            continue
-        pr = position.classify(kline, params)
-        p = pr["position"]
-        counts[p] = counts.get(p, 0) + 1
-
-        sr = {"level": "NONE", "valid": False, "detail": {}}
-        m = {"trade_type": None, "reason": "位置过滤", "halved": False, "add_plan": None}
-        if p in position.CANDIDATE_OK:
-            plat = None
-            if pr.get("platform_length"):
-                n = len(kline)
-                plat = {"start": max(0, n - pr["platform_length"]), "end": n - 1}
-            sr = signal.evaluate(kline, params, platform=plat)
-            m = matcher.match(pr, sr, params)
-
-        is_cand = 1 if m.get("trade_type") else 0
-        conn.execute(
-            "INSERT OR REPLACE INTO scan_result(scan_date,code,name,position,position_detail,"
-            "signal,signal_detail,trade_type,halved,is_candidate,ref_platform_top,"
-            "ref_platform_bottom,ref_ma20,ref_prev_close,param_version) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (today, code, name, p, json.dumps(pr.get("detail"), ensure_ascii=False),
-             sr.get("level"), json.dumps(sr.get("detail"), ensure_ascii=False),
-             m.get("trade_type"), 1 if m.get("halved") else 0, is_cand,
-             pr.get("platform_top"), pr.get("platform_bottom"),
-             pr.get("ma20"), pr.get("prev_close"), pv))
-        if is_cand:
-            candidates.append({
-                "code": code, "name": name, "type": m["trade_type"],
-                "position": p, "halved": m.get("halved", False),
-                "signal": sr.get("level"), "signal_detail": sr.get("detail"),
-                "ref_platform_top": pr.get("platform_top"),
-                "ref_platform_bottom": pr.get("platform_bottom"),
-                "ref_ma20": pr.get("ma20"), "ref_prev_close": pr.get("prev_close"),
-                "add_plan": m.get("add_plan"),
-            })
-        if i % 200 == 0:
-            conn.commit()
-            print(f"  scan {i}/{len(items)} 候选 {len(candidates)}", flush=True)
-    conn.commit()
-    return pv, counts, candidates
-
-
 def cmd_scan(args):
     conn = _conn()
     rows = conn.execute(
@@ -166,8 +99,8 @@ def cmd_scan(args):
         codes = codes[: args.limit]
 
     today = datetime.today().strftime("%Y-%m-%d")
-    pv, counts, candidates = run_pipeline(conn, codes, today, P)
-    out = _write_candidates(today, pv, counts, len(codes), candidates)
+    pv, counts, candidates = runner.run_pipeline(conn, codes, today, P)
+    out = runner._write_candidates(today, pv, counts, len(codes), candidates)
     print(f"[scan] 扫描 {len(codes)} 只 -> {counts}")
     print(f"[scan] 候选 {len(candidates)} 只 -> {out}")
     conn.close()
@@ -210,8 +143,8 @@ def cmd_simulate(args):
         items.append((code, f"SIM-{shape}"))
     conn.commit()
 
-    pv, counts, candidates = run_pipeline(conn, items, today, P)
-    out = _write_candidates(today, pv, counts, len(items), candidates, suffix="-sim")
+    pv, counts, candidates = runner.run_pipeline(conn, items, today, P)
+    out = runner._write_candidates(today, pv, counts, len(items), candidates, suffix="-sim")
     print(f"[simulate] 合成 {len(items)} 只 -> {counts}")
     print(f"[simulate] 候选 {len(candidates)} 只 -> {out}")
     conn.close()
@@ -301,6 +234,22 @@ def cmd_watch(args):
         if r["triggered"]:
             repo.trigger_watch(conn, it["id"])
     conn.close()
+
+
+def cmd_scan_run(args):
+    """完整流程：universe 重判 → 日线增量 → 扫描 → 候选清单。"""
+    def prog(phase, current, total):
+        if total:
+            print(f"  [{phase}] {current}/{total}", flush=True)
+
+    try:
+        res = runner.run_full(P, progress=prog, skip_fetch=args.skip_fetch)
+    except Exception as e:  # noqa: BLE001
+        print(f"[scan-run] 失败: {type(e).__name__}: {e}")
+        return
+    print(f"[scan-run] universe {res['universe']} 只 | fetch {res['fetch']} | 失败 {res['failed_count']}")
+    print(f"[scan-run] {res['counts']}")
+    print(f"[scan-run] 候选 {res['candidates']} 只 -> {res['output']}")
 
 
 def cmd_selftest(args):
@@ -510,6 +459,11 @@ def main(argv=None):
     s = sub.add_parser("scan", help="全流程扫描")
     s.add_argument("--limit", type=int, default=0)
     s.set_defaults(func=cmd_scan)
+
+    sr = sub.add_parser("scan-run", help="完整流程：universe → 日线增量 → 扫描")
+    sr.add_argument("--skip-fetch", action="store_true",
+                    help="跳过日线更新（仅用本地数据重算扫描，秒级）")
+    sr.set_defaults(func=cmd_scan_run)
 
     sub.add_parser("selftest", help="规则自检").set_defaults(func=cmd_selftest)
 
