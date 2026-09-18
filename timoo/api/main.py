@@ -29,10 +29,10 @@ app.add_middleware(
 
 app.include_router(router)
 
-# 前端静态页（web/index.html），已注册的 /api 路由优先匹配
-web_dir = ROOT / "web"
-if web_dir.exists():
-    app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
+# 前端构建产物（web/dist，npm run build 生成）；开发时走 vite dev + proxy
+web_dist = ROOT / "web" / "dist"
+if web_dist.exists():
+    app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
 
 
 if __name__ == "__main__":

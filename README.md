@@ -53,13 +53,33 @@ python -m timoo.cli scan --limit 50       # 全流程扫描，输出候选清单
 - [ ] T11 月度统计完善（API 已有简版：分类型胜率 / PAR / 样本门禁）
 - [ ] T12 定时任务（15:30 后自动跑全流程）
 
-## Web UI
+## Web UI（npm 工程化：Vue3 + TypeScript + Vite + Element Plus）
 
-双击 `start.bat`（或 `.venv\Scripts\python.exe -m uvicorn timoo.api.main:app --port 8100`），浏览器打开 <http://127.0.0.1:8100>。
+```bash
+cd web
+npm install
+npm run dev        # 开发：http://localhost:5173，/api 自动代理到 8100
+npm run typecheck  # vue-tsc 类型检查
+npm run build      # 构建：产物 web/dist/，由 FastAPI 托管
+```
+
+生产模式：双击 `start.bat`（首次自动构建前端再启动 API），浏览器打开 <http://127.0.0.1:8100>。
 
 五个页面：**候选池**（按类型分组 + 加仓计划）、**入场单**（8 项表单 + append-only 列表）、**持仓**（出场动作 + 确认执行）、**观察池**（再入场触发 + 剩余天数）、**复盘**（PAR / 分类型统计 / 违规记录 / 20 笔样本门禁进度条）。
 
-前端为无构建单页（Vue3 + Element Plus CDN），后续如需工程化可迁移 Vite。
+```
+web/src/
+├── main.ts / App.vue        # 入口与布局（顶栏 + tab 切换）
+├── api/index.ts             # API 封装（fetch）
+├── types.ts                 # 类型定义（Candidate/EntryOrder/...）
+├── styles/global.css        # 全局样式（涨红跌绿 A 股配色）
+└── views/
+    ├── CandidatesView.vue   # 候选池
+    ├── OrderView.vue        # 入场单
+    ├── HoldingsView.vue     # 持仓
+    ├── WatchView.vue        # 观察池
+    └── StatsView.vue        # 复盘
+```
 
 ## 设计要点
 
