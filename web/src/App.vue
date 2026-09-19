@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { api } from './api'
 import type {
   Candidate,
@@ -52,7 +53,23 @@ function onToOrder(row: Candidate) {
   tab.value = 'order'
 }
 
-onMounted(refresh)
+async function checkBackend() {
+  try {
+    const r = await api.getVersion()
+    if (r.code !== 200) throw new Error('bad response')
+  } catch {
+    ElMessage.error({
+      message: '后端是旧进程：K线抽屉、日期筛选等新功能不可用。请关闭 start.bat 命令行窗口后重新双击启动。',
+      duration: 0,
+      showClose: true,
+    })
+  }
+}
+
+onMounted(() => {
+  checkBackend()
+  refresh()
+})
 </script>
 
 <template>

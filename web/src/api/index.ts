@@ -34,6 +34,9 @@ export interface OrderFormPayload {
 }
 
 export const api = {
+  /** 后端版本探测：404/异常 = 后端是旧进程 */
+  getVersion: () => jget<{ version: string; features: string[] }>('/api/version'),
+
   triggerScan: (skipFetch = false) =>
     jpost<{ started: boolean; skip_fetch: boolean }>('/api/scan/run', { skip_fetch: skipFetch }),
 

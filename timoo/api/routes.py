@@ -22,6 +22,17 @@ from ..pipeline import cache as kcache
 ROOT = Path(__file__).resolve().parents[2]
 router = APIRouter(prefix="/api")
 
+# 后端能力版本：新增端点时递增日期序号。
+# 前端启动时探测 /api/version，404 或版本不符即提示"重启服务"，
+# 防止旧进程 + 新前端导致的"假 bug"（2026-09-19 已发生两次）。
+API_VERSION = "2026-09-19.1"
+
+
+@router.get("/version")
+def version():
+    return ok({"version": API_VERSION,
+               "features": ["scan-run", "live-candidates", "scan-dates", "stock-kline"]})
+
 # ---------------------------------------------------------------------------
 # 扫描任务（后台线程 + 轮询进度）
 # ---------------------------------------------------------------------------

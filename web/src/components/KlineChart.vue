@@ -9,6 +9,7 @@ const props = defineProps<{ code: string }>()
 const el = ref<HTMLDivElement>()
 const loading = ref(true)
 const empty = ref(false)
+const emptyTip = ref('本地无该股K线数据')
 let chart: Chart | null = null
 
 /** 中国惯例：涨红跌绿 */
@@ -51,8 +52,12 @@ onMounted(async () => {
     getBars: ({ callback }) => {
       api.getKline(props.code, 180).then((r) => {
         loading.value = false
-        if (r.code !== 200 || !r.data.rows.length) {
+        if (r.code !== 200 || !r.data?.rows?.length) {
+          // 404 = 后端旧进程无此端点；200 但空 = 该股确实没下载到K线
           empty.value = true
+          emptyTip.value = r.code !== 200
+            ? 'K线接口不存在：请重启服务（后端是旧进程）'
+            : '本地无该股K线数据（可能下载失败，见失败清单）'
           callback([])
           return
         }
@@ -75,7 +80,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="kline-wrap">
     <div v-if="loading" class="kline-tip">加载K线中…</div>
-    <div v-else-if="empty" class="kline-tip">本地无该股K线数据</div>
+    <div v-else-if="empty" class="kline-tip">{{ emptyTip }}</div>
     <div ref="el" class="kline-canvas" :style="{ visibility: loading || empty ? 'hidden' : 'visible' }" />
   </div>
 </template>
