@@ -49,7 +49,7 @@ onMounted(async () => {
   if (!chart) return
   chart.setBarSpace(8)
   // 主图：蜡烛 + MA 均线（paneId 指定叠加到蜡烛窗格）；副图：VOL → KDJ → MACD（自动各建窗格）
-  chart.createIndicator({ name: 'MA', calcParams: [5, 20, 60], paneId: 'candle_pane' }, false)
+  chart.createIndicator({ name: 'MA', calcParams: [5, 10, 20, 60], paneId: 'candle_pane' }, false)
   chart.createIndicator({ name: 'VOL', calcParams: [5] }, false)
   chart.createIndicator({ name: 'KDJ', calcParams: [9, 3, 3] }, false)
   chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] }, false)
