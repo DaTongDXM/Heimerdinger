@@ -12,7 +12,7 @@ const empty = ref(false)
 const emptyTip = ref('本地无该股K线数据')
 let chart: Chart | null = null
 
-/** 中国惯例：涨红跌绿 */
+/** 中国惯例：涨红跌绿（蜡烛 + MACD 柱） */
 const CN_CANDLE_STYLES = {
   candle: {
     bar: {
@@ -26,6 +26,9 @@ const CN_CANDLE_STYLES = {
       downWickColor: '#2DC08E',
       noChangeWickColor: '#909399',
     },
+  },
+  indicator: {
+    bars: [{ upColor: '#F0284A', downColor: '#2DC08E', noChangeColor: '#909399' }],
   },
 }
 
@@ -45,9 +48,11 @@ onMounted(async () => {
   chart = init(el.value, { locale: 'zh-CN', styles: CN_CANDLE_STYLES })
   if (!chart) return
   chart.setBarSpace(8)
-  // MA 是 overlay 指标 → 叠加在蜡烛图；VOL 非 overlay → 自动新建副图
-  chart.createIndicator({ name: 'MA', calcParams: [5, 20, 60] }, false)
+  // 主图：蜡烛 + MA 均线（paneId 指定叠加到蜡烛窗格）；副图：VOL → KDJ → MACD（自动各建窗格）
+  chart.createIndicator({ name: 'MA', calcParams: [5, 20, 60], paneId: 'candle_pane' }, false)
   chart.createIndicator({ name: 'VOL', calcParams: [5] }, false)
+  chart.createIndicator({ name: 'KDJ', calcParams: [9, 3, 3] }, false)
+  chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] }, false)
   chart.setDataLoader({
     getBars: ({ callback }) => {
       api.getKline(props.code, 180).then((r) => {
@@ -90,12 +95,12 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 480px;
+  min-height: 700px;
 }
 .kline-canvas {
   width: 100%;
   height: 100%;
-  min-height: 480px;
+  min-height: 700px;
 }
 .kline-tip {
   position: absolute;
