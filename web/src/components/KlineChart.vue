@@ -61,6 +61,9 @@ onMounted(async () => {
       })
     },
   })
+  // v10：必须设置 symbol + period 才会触发 dataLoader 拉数
+  chart.setSymbol({ ticker: props.code, pricePrecision: 2, volumePrecision: 0 })
+  chart.setPeriod({ type: 'day', span: 1 })
 })
 
 onBeforeUnmount(() => {
