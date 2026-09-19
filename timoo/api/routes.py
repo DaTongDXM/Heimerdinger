@@ -107,6 +107,46 @@ def scan_result(date: Optional[str] = None, candidates_only: bool = False):
         conn.close()
 
 
+@router.get("/scan/dates")
+def scan_dates():
+    """可选的扫描日期列表（候选池日期筛选用），新→旧。"""
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT scan_date AS d FROM scan_result ORDER BY d DESC").fetchall()
+        dates = [r["d"] for r in rows]
+        cand_dir = ROOT / "data" / "candidates"
+        if cand_dir.exists():
+            for f in cand_dir.glob("*.json"):
+                d = f.stem.replace("-sim", "")
+                if d not in dates:
+                    dates.append(d)
+        return ok(sorted(dates, reverse=True))
+    finally:
+        conn.close()
+
+
+@router.get("/stock/{code}/kline")
+def stock_kline(code: str, limit: int = 180):
+    """个股日K线（候选池抽屉图表用）。"""
+    conn = _conn()
+    try:
+        df = kcache.load_kline(conn, code, limit=max(1, min(limit, 500)))
+        name_row = conn.execute(
+            "SELECT name FROM universe_snapshot WHERE code=? "
+            "ORDER BY date DESC LIMIT 1", (code,)).fetchone()
+        rows = [
+            {"date": r["date"], "open": r["open"], "high": r["high"],
+             "low": r["low"], "close": r["close"], "vol": r["vol"]}
+            for _, r in df.iterrows()
+        ]
+        return ok({"code": code,
+                   "name": name_row["name"] if name_row else "",
+                   "rows": rows})
+    finally:
+        conn.close()
+
+
 @router.get("/candidates")
 def candidates(date: Optional[str] = None):
     if not date:

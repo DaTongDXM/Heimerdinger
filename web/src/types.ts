@@ -113,6 +113,21 @@ export interface Violation {
   detail: string | null
 }
 
+export interface KlineBar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  vol: number
+}
+
+export interface KlineResp {
+  code: string
+  name: string
+  rows: KlineBar[]
+}
+
 export interface ScanProgress {
   running: boolean
   phase: string

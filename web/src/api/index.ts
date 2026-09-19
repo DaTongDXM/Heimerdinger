@@ -3,6 +3,7 @@ import type {
   CandidatesResp,
   EntryOrder,
   HoldingItem,
+  KlineResp,
   ScanProgress,
   StatsResp,
   Violation,
@@ -39,7 +40,13 @@ export const api = {
   getScanProgress: () =>
     jget<ScanProgress>('/api/scan/progress'),
 
-  getCandidates: () => jget<CandidatesResp>('/api/candidates'),
+  getCandidates: (date?: string) =>
+    jget<CandidatesResp>(date ? `/api/candidates?date=${date}` : '/api/candidates'),
+
+  getScanDates: () => jget<string[]>('/api/scan/dates'),
+
+  getKline: (code: string, limit = 180) =>
+    jget<KlineResp>(`/api/stock/${code}/kline?limit=${limit}`),
 
   getOrders: (status = 'OPEN') =>
     jget<EntryOrder[]>(`/api/entry-orders?status=${encodeURIComponent(status)}`),

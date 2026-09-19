@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 import type { Candidate, CandidatesResp, Position, ScanProgress } from '../types'
+import KlineChart from '../components/KlineChart.vue'
 
 const props = defineProps<{ cand: CandidatesResp | null }>()
 const emit = defineEmits<{ (e: 'to-order', row: Candidate): void; (e: 'refresh'): void }>()
@@ -10,6 +11,37 @@ const emit = defineEmits<{ (e: 'to-order', row: Candidate): void; (e: 'refresh')
 const scanning = ref(false)
 const progress = ref<ScanProgress | null>(null)
 let timer: number | null = null
+
+// --- 日期筛选 ---
+const scanDates = ref<string[]>([])
+const selectedDate = ref<string>('') // '' = 最新
+const historyCand = ref<CandidatesResp | null>(null)
+
+/** 当前展示的数据源：选了历史日期用历史，否则用 App 传入的最新 */
+const currentCand = computed<CandidatesResp | null>(() =>
+  selectedDate.value ? historyCand.value : props.cand,
+)
+
+async function onDateChange(d: string) {
+  historyCand.value = null
+  if (!d) return
+  const r = await api.getCandidates(d)
+  if (r.code !== 200) {
+    ElMessage.error(r.message)
+    selectedDate.value = ''
+    return
+  }
+  historyCand.value = r.data
+}
+
+// --- K线抽屉 ---
+const drawerVisible = ref(false)
+const drawerStock = ref<{ code: string; name: string }>({ code: '', name: '' })
+
+function openKline(row: Candidate) {
+  drawerStock.value = { code: row.code, name: row.name }
+  drawerVisible.value = true
+}
 
 const POS_NAME: Record<Position, string> = {
   BOTTOM_REVERSAL: '底部反转',
@@ -36,8 +68,21 @@ const GROUP_LABELS: Record<string, string> = {
 
 /** 扫描中用实时候选流，结束后用最终清单 */
 const displayList = computed<Candidate[]>(() =>
-  scanning.value ? (progress.value?.candidates ?? []) : (props.cand?.candidates ?? []),
+  scanning.value ? (progress.value?.candidates ?? []) : (currentCand.value?.candidates ?? []),
 )
+
+/** 信号等级 → 中文枚举（S-4 有效组合） */
+const SIGNAL_CN: Record<string, string> = {
+  STRONG: '强信号',
+  STANDARD: '标准信号',
+  NONE: '无信号',
+}
+
+function signalName(row: Candidate): string {
+  const base = SIGNAL_CN[row.signal] ?? row.signal
+  const combo = (row.signal_detail as { combo?: string } | null)?.combo
+  return combo ? `${base} · ${combo}` : base
+}
 
 const groups = computed(() => {
   const list = displayList.value
@@ -73,6 +118,9 @@ async function poll() {
     const res = r.data.result
     ElMessage.success(`扫描完成：universe ${res.universe} 只，候选 ${res.candidates} 只` +
       (res.failed_count ? `（${res.failed_count} 只拉取失败，见失败清单）` : ''))
+    selectedDate.value = ''
+    historyCand.value = null
+    api.getScanDates().then((d) => { if (d.code === 200) scanDates.value = d.data })
     emit('refresh')
   }
 }
@@ -91,6 +139,7 @@ async function startScan(skipFetch: boolean) {
 }
 
 onMounted(() => {
+  api.getScanDates().then((r) => { if (r.code === 200) scanDates.value = r.data })
   // 页面加载时若已有扫描在跑，恢复进度显示
   api.getScanProgress().then((r) => {
     if (r.code === 200 && r.data.running) {
@@ -109,7 +158,23 @@ onBeforeUnmount(() => {
 <template>
   <div class="card">
     <h3 style="display: flex; align-items: center; gap: 12px">
-      <span>扫描摘要 · {{ cand?.scan_date ?? '—' }}</span>
+      <span>扫描摘要 · {{ currentCand?.scan_date ?? '—' }}</span>
+      <el-select
+        v-model="selectedDate"
+        size="small"
+        clearable
+        placeholder="默认最新"
+        style="width: 170px"
+        :disabled="scanning"
+        @change="onDateChange"
+      >
+        <el-option
+          v-for="(d, i) in scanDates"
+          :key="d"
+          :label="d + (i === 0 ? '（最新）' : '')"
+          :value="d"
+        />
+      </el-select>
       <span style="margin-left: auto; display: flex; gap: 8px">
         <el-button
           size="small"
@@ -138,14 +203,14 @@ onBeforeUnmount(() => {
 
     <div class="summary">
       <div class="stat">
-        <div class="num">{{ scanning ? (progress?.total ?? 0) : (cand?.total ?? 0) }}</div>
+        <div class="num">{{ scanning ? (progress?.total ?? 0) : (currentCand?.total ?? 0) }}</div>
         <div class="lbl">{{ scanning ? '扫描总数(进行中)' : '扫描总数' }}</div>
       </div>
       <div class="stat">
         <div class="num pos-up">{{ displayList.length }}</div>
         <div class="lbl">{{ scanning ? '已发现候选' : '候选' }}</div>
       </div>
-      <div v-for="(v, k) in cand?.counts ?? {}" :key="k" class="stat">
+      <div v-for="(v, k) in currentCand?.counts ?? {}" :key="k" class="stat">
         <div class="num" :class="k === 'DOWNTREND_CONTINUATION' ? 'pos-down' : ''">{{ v }}</div>
         <div class="lbl">{{ posName(k) }}</div>
       </div>
@@ -158,15 +223,21 @@ onBeforeUnmount(() => {
   <div v-for="g in groups" :key="g.type" class="card">
     <h3>{{ g.label }}（{{ g.rows.length }}）</h3>
     <el-table :data="g.rows" size="small" border>
-      <el-table-column prop="code" label="代码" width="90" />
+      <el-table-column label="代码" width="90">
+        <template #default="s">
+          <el-link type="primary" :underline="false" @click="openKline(s.row)">
+            {{ s.row.code }}
+          </el-link>
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="名称" width="140" />
       <el-table-column label="位置" width="110">
         <template #default="s">{{ posName(s.row.position) }}</template>
       </el-table-column>
-      <el-table-column label="信号" width="110">
+      <el-table-column label="信号" min-width="200">
         <template #default="s">
-          <span v-if="s.row.signal === 'NONE'" class="muted">无（C类不等信号）</span>
-          <span v-else class="pos-up">{{ s.row.signal }}</span>
+          <span v-if="s.row.signal === 'NONE'" class="muted">无信号（C类不等信号）</span>
+          <span v-else class="pos-up">{{ signalName(s.row) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="建议关注位" min-width="240">
@@ -196,11 +267,21 @@ onBeforeUnmount(() => {
   </div>
 
   <el-empty
-    v-if="!scanning && cand && !cand.candidates.length"
-    description="今日无候选（先运行扫描）"
+    v-if="!scanning && currentCand && !currentCand.candidates.length"
+    :description="selectedDate ? `${selectedDate} 无候选` : '今日无候选（先运行扫描）'"
   />
   <el-empty
     v-if="scanning && !displayList.length"
     description="扫描进行中，候选出现后将实时显示在这里…"
   />
+
+  <el-drawer
+    v-model="drawerVisible"
+    direction="rtl"
+    size="640px"
+    :title="`${drawerStock.name}（${drawerStock.code}）· 日K`"
+    destroy-on-close
+  >
+    <KlineChart v-if="drawerVisible" :code="drawerStock.code" />
+  </el-drawer>
 </template>
