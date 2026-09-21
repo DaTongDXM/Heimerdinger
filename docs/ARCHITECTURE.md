@@ -1,4 +1,4 @@
-# timoo 系统架构设计
+# Heimerdinger 系统架构设计
 
 > 版本：v1.0 | 日期：2026-09-18 | 对应规范：v1.3
 > 形态：**CLI 核心（每日收盘后跑全流程）+ Web UI（查看与填写）**，两者共享同一份 SQLite 数据。
@@ -9,7 +9,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  CLI 入口  timoo run / timoo scan / timoo monitor          │
+│  CLI 入口  heimerdinger run / heimerdinger scan / heimerdinger monitor          │
 │            （每日 15:30 后由调度器或手动触发）                │
 └──────────────────────┬─────────────────────────────────────┘
                        │
@@ -61,7 +61,7 @@
 ## 3. 目录结构
 
 ```
-timoo/
+Heimerdinger/
 ├── docs/                          # 项目文档
 │   ├── README.md                  # 文档索引
 │   ├── PRD.md                     # 产品需求文档
@@ -69,7 +69,7 @@ timoo/
 │   ├── ARCHITECTURE.md            # 本文件
 │   ├── ROADMAP.md                 # 路线图
 │   └── METRICS.md                 # 验证闭环与指标
-├── timoo/                         # Python 包（CLI 核心）
+├── heimerdinger/                  # Python 包（CLI 核心）
 │   ├── cli.py                     # CLI 入口：run / scan / monitor / stats
 │   ├── config.py                  # 参数集中管理（D1-D6/V1/V4/B1/X1）
 │   ├── pipeline/                  # 六阶段流水线
@@ -101,7 +101,7 @@ timoo/
 │       ├── api/
 │       └── components/
 ├── data/
-│   ├── timoo.db                   # SQLite 主库
+│   ├── heimerdinger.db                   # SQLite 主库
 │   ├── candidates/YYYY-MM-DD.json # 每日候选清单落盘（人可读）
 │   └── failed/YYYY-MM-DD.json     # 当日拉取失败清单
 ├── start.bat                      # 一键启动（API + Web）
@@ -261,7 +261,7 @@ classDiagram
 ```mermaid
 sequenceDiagram
     participant S as 调度器/用户
-    participant CLI as timoo cli
+    participant CLI as Heimerdinger cli
     participant U as universe
     participant DS as data_source(+cache)
     participant P as position
@@ -270,7 +270,7 @@ sequenceDiagram
     participant DB as SQLite
     participant G as guard
 
-    S->>CLI: timoo run (15:30 后)
+    S->>CLI: heimerdinger run (15:30 后)
     CLI->>U: build_universe()
     U->>DS: ak.stock_zh_a_spot_em()
     DS-->>U: 全量列表
@@ -308,7 +308,7 @@ sequenceDiagram
     CLI-->>S: 完成（候选 N 只，失败 M 只）
 ```
 
-**监控流程**（`timoo monitor`，收盘后跑）：
+**监控流程**（`heimerdinger monitor`，收盘后跑）：
 
 ```
 读取 holding → 按 entry_order.trade_type 分派出场规则

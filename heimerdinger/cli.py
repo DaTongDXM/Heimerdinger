@@ -1,11 +1,11 @@
 """CLI 入口（阶段①~④）。
 
 用法：
-    python -m timoo.cli init                    # 初始化数据库
-    python -m timoo.cli universe                # 构建并落盘 universe
-    python -m timoo.cli fetch  [--limit N]      # 增量/全量更新日线
-    python -m timoo.cli scan   [--limit N]      # 全流程：位置→信号→类型→候选
-    python -m timoo.cli selftest                # 规则自检（SPEC §11）
+    python -m heimerdinger.cli init                    # 初始化数据库
+    python -m heimerdinger.cli universe                # 构建并落盘 universe
+    python -m heimerdinger.cli fetch  [--limit N]      # 增量/全量更新日线
+    python -m heimerdinger.cli scan   [--limit N]      # 全流程：位置→信号→类型→候选
+    python -m heimerdinger.cli selftest                # 规则自检（SPEC §11）
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def cmd_fetch(args):
         "AND in_universe=1 ORDER BY code").fetchall()
     codes = [r["code"] for r in rows]
     if not codes:
-        print("[fetch] universe 为空，请先运行 `python -m timoo.cli universe`")
+        print("[fetch] universe 为空，请先运行 `python -m heimerdinger.cli universe`")
         return
     if args.limit:
         codes = codes[: args.limit]
@@ -442,10 +442,10 @@ def main(argv=None):
 
     from .pipeline import data_source
 
-    # 默认直连行情接口，避免被环境代理拦截（TIMOO_USE_PROXY=1 可恢复走代理）
-    data_source.configure_network(os.environ.get("TIMOO_USE_PROXY", "") != "1")
+    # 默认直连行情接口，避免被环境代理拦截（HEIMERDINGER_USE_PROXY=1 可恢复走代理）
+    data_source.configure_network(os.environ.get("HEIMERDINGER_USE_PROXY", "") != "1")
 
-    ap = argparse.ArgumentParser(prog="timoo", description="个人短线交易纪律执行系统")
+    ap = argparse.ArgumentParser(prog="Heimerdinger", description="个人短线交易纪律执行系统")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="初始化数据库与参数版本").set_defaults(func=cmd_init)

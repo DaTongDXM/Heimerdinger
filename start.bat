@@ -1,5 +1,5 @@
 @echo off
-rem timoo one-click launcher: build frontend (if needed) + start API at http://127.0.0.1:8100
+rem Heimerdinger one-click launcher: build frontend (if needed) + start API at http://127.0.0.1:8100
 cd /d %~dp0
 
 if not exist .venv\Scripts\python.exe (
@@ -25,4 +25,4 @@ if not exist web\dist\index.html (
 )
 
 start "" http://127.0.0.1:8100
-.venv\Scripts\python.exe -m uvicorn timoo.api.main:app --host 127.0.0.1 --port 8100
+.venv\Scripts\python.exe -m uvicorn heimerdinger.api.main:app --host 127.0.0.1 --port 8100

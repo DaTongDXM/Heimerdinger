@@ -74,7 +74,7 @@ onMounted(() => {
 
 <template>
   <div class="topbar">
-    <span class="brand">timoo</span>
+    <span class="brand">Heimerdinger</span>
     <el-menu
       :default-active="tab"
       mode="horizontal"

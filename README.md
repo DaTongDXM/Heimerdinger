@@ -1,4 +1,4 @@
-# timoo
+# Heimerdinger
 
 个人短线交易纪律执行系统。**不是选股工具，是纪律执行工具**——把「位置优先 → 信号确认 → 类型化出入场规则 → 观察池跟踪」固化为每日流水线。
 
@@ -11,12 +11,12 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-python -m timoo.cli selftest              # 规则自检（23 项，不需要网络）
-python -m timoo.cli simulate --stocks 30  # 离线端到端（合成数据，不需要网络）
-python -m timoo.cli init                  # 初始化数据库
-python -m timoo.cli universe              # 构建 universe
-python -m timoo.cli fetch --limit 50      # 拉取日线（首次建议 --full）
-python -m timoo.cli scan --limit 50       # 全流程扫描，输出候选清单
+python -m heimerdinger.cli selftest              # 规则自检（23 项，不需要网络）
+python -m heimerdinger.cli simulate --stocks 30  # 离线端到端（合成数据，不需要网络）
+python -m heimerdinger.cli init                  # 初始化数据库
+python -m heimerdinger.cli universe              # 构建 universe
+python -m heimerdinger.cli fetch --limit 50      # 拉取日线（首次建议 --full）
+python -m heimerdinger.cli scan --limit 50       # 全流程扫描，输出候选清单
 ```
 
 候选清单落盘在 `data/candidates/YYYY-MM-DD.json`。
@@ -86,12 +86,12 @@ web/src/
 - **先位置、后信号**：下跌中继在阶段②被硬过滤，不进入信号计算。
 - **口径强制**：所有指标基于 T-1 及以前收盘数据，指标模块不接受盘中价参数。
 - **参数版本化**：每次运行记录 `param_version`，同一参数 + 同一日线快照 → 结果一致。
-- **禁止事项内建**：N1-N8 由 `timoo/guard.py` 统一拦截，资金流相关逻辑无任何代码路径。
+- **禁止事项内建**：N1-N8 由 `heimerdinger/guard.py` 统一拦截，资金流相关逻辑无任何代码路径。
 
 ## 网络说明
 
 行情接口为东财 / 腾讯公开接口。若环境存在 `HTTP_PROXY` 导致连接被拒，程序默认直连；
-需要走代理时设置环境变量 `TIMOO_USE_PROXY=1`。
+需要走代理时设置环境变量 `HEIMERDINGER_USE_PROXY=1`。
 
 ## 文档
 

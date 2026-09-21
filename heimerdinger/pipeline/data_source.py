@@ -31,7 +31,7 @@ def configure_network(disable_proxy: bool = True) -> None:
 
     某些环境下存在 HTTP(S)_PROXY 环境变量，requests 会走代理，而代理可能拒绝
     行情域名（表现为 ProxyError / RemoteDisconnected）。本项目仅访问腾讯与
-    AKShare 封装的公开行情接口，默认直连。需要代理时设置环境变量 TIMOO_USE_PROXY=1。
+    AKShare 封装的公开行情接口，默认直连。需要代理时设置环境变量 HEIMERDINGER_USE_PROXY=1。
     """
     import os
 
@@ -42,7 +42,7 @@ def configure_network(disable_proxy: bool = True) -> None:
     try:
         import requests
 
-        if getattr(requests.Session, "_timoo_patched", False):
+        if getattr(requests.Session, "_heimerdinger_patched", False):
             return
         _orig_init = requests.Session.__init__
 
@@ -51,7 +51,7 @@ def configure_network(disable_proxy: bool = True) -> None:
             self.trust_env = False
 
         requests.Session.__init__ = _init
-        requests.Session._timoo_patched = True
+        requests.Session._heimerdinger_patched = True
     except Exception:  # noqa: BLE001 - requests 不可用时跳过
         pass
 

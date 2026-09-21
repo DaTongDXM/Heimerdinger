@@ -134,7 +134,7 @@ def get_db_path(root: Optional[Path] = None) -> Path:
     root = Path(root) if root else Path(__file__).resolve().parents[2]
     data_dir = root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "timoo.db"
+    return data_dir / "heimerdinger.db"
 
 
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:

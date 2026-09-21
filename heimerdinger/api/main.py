@@ -1,8 +1,8 @@
 """FastAPI 应用入口。
 
 启动：
-    python -m timoo.api.main          # 直接运行
-    uvicorn timoo.api.main:app --port 8100
+    python -m heimerdinger.api.main          # 直接运行
+    uvicorn heimerdinger.api.main:app --port 8100
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 # API 进程同样需要直连行情域名（绕过系统代理），与 CLI 行为一致
 import os  # noqa: E402
 
-configure_network(os.environ.get("TIMOO_USE_PROXY", "") != "1")
+configure_network(os.environ.get("HEIMERDINGER_USE_PROXY", "") != "1")
 
-app = FastAPI(title="timoo", version="0.1.0",
+app = FastAPI(title="Heimerdinger", version="0.1.0",
               description="个人短线交易纪律执行系统 API")
 
 app.add_middleware(
@@ -44,4 +44,4 @@ if web_dist.exists():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("timoo.api.main:app", host="127.0.0.1", port=8100, reload=False)
+    uvicorn.run("heimerdinger.api.main:app", host="127.0.0.1", port=8100, reload=False)
